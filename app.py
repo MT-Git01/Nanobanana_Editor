@@ -10,6 +10,7 @@ import io
 import json
 import tempfile
 import fitz
+import unicodedata
 
 
 # =====================================================================
@@ -21,6 +22,22 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Initialize Session States at the very beginning
+if "ocr_blocks" not in st.session_state:
+    st.session_state.ocr_blocks = []
+if "bg_image" not in st.session_state:
+    st.session_state.bg_image = None
+if "orig_image" not in st.session_state:
+    st.session_state.orig_image = None
+if "image_aspect" not in st.session_state:
+    st.session_state.image_aspect = 16/9
+if "selected_block_id" not in st.session_state:
+    st.session_state.selected_block_id = None
+if "source_file_name" not in st.session_state:
+    st.session_state.source_file_name = ""
+if "selected_block_ids" not in st.session_state:
+    st.session_state.selected_block_ids = set()
 
 # Read and apply custom CSS styling
 if os.path.exists("style.css"):
@@ -40,7 +57,7 @@ st.markdown(
     <div class="banner">
         <h1 class="gradient-text" style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 2.5rem;">🍌 Nanobanana Editor</h1>
         <p style="margin: 5px 0 0 0; color: #a0aec0; font-size: 1.1rem; font-family: 'Inter', sans-serif;">
-            インフォグラフィック画像・PDFを解析し、「文字の消去・背景復元」と「編集可能なスライドテキストオブジェクトへの変換」を同時に行います。
+            インフォグラフィック画像・PDFを解析し、「文字の選択的消去・背景復元」と「編集可能なスライドテキストオブジェクトへの変換」を同時に行います。
         </p>
     </div>
     """,
@@ -121,24 +138,184 @@ def extract_dominant_text_color(image_rgb, x, y, w, h):
     return text_color
 
 
-def inpaint_image(image_bgr, blocks):
-    """Erase bounding box regions using OpenCV's inpainting."""
+def inpaint_image(image_bgr, blocks, selected_ids):
+    """Erase only selected bounding box regions using OpenCV's inpainting."""
     img_h, img_w, _ = image_bgr.shape
     mask = np.zeros((img_h, img_w), dtype=np.uint8)
     
     for block in blocks:
-        x, y, w, h = int(block["x"]), int(block["y"]), int(block["width"]), int(block["height"])
-        # Add padding/dilation to fully cover anti-aliasing text edges
-        padding = 4
-        x1 = max(0, x - padding)
-        y1 = max(0, y - padding)
-        x2 = min(img_w, x + w + padding)
-        y2 = min(img_h, y + h + padding)
-        cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+        if block["id"] in selected_ids:
+            x, y, w, h = int(block["x"]), int(block["y"]), int(block["width"]), int(block["height"])
+            # Add padding/dilation to fully cover anti-aliasing text edges
+            padding = 4
+            x1 = max(0, x - padding)
+            y1 = max(0, y - padding)
+            x2 = min(img_w, x + w + padding)
+            y2 = min(img_h, y + h + padding)
+            cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+            
+    if not np.any(mask):
+        return image_bgr.copy()
         
     # Inpaint using TELEA method
     inpainted = cv2.inpaint(image_bgr, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
     return inpainted
+
+
+def generate_checkerboard(width, height, box_size=12):
+    """Generates a gray and white checkerboard pattern image."""
+    checkerboard = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(checkerboard)
+    for y in range(0, height, box_size):
+        for x in range(0, width, box_size):
+            if ((x // box_size) + (y // box_size)) % 2 == 0:
+                draw.rectangle([x, y, x + box_size, y + box_size], fill=(225, 225, 230, 255))
+    return checkerboard
+
+
+def generate_cutout_image(image_pil, blocks, selected_ids):
+    """
+    Creates an RGBA image where the regions of selected blocks are made transparent,
+    and draws outlines around them for user guidance.
+    """
+    rgba_img = image_pil.convert("RGBA")
+    mask = Image.new("L", rgba_img.size, 255)
+    mask_draw = ImageDraw.Draw(mask)
+    
+    for block in blocks:
+        if block["id"] in selected_ids:
+            x, y, w, h = int(block["x"]), int(block["y"]), int(block["width"]), int(block["height"])
+            padding = 4
+            x1 = max(0, x - padding)
+            y1 = max(0, y - padding)
+            x2 = min(rgba_img.width, x + w + padding)
+            y2 = min(rgba_img.height, y + h + padding)
+            mask_draw.rectangle([x1, y1, x2, y2], fill=0)
+            
+    rgba_img.putalpha(mask)
+    
+    # Generate checkerboard background
+    checkerboard = generate_checkerboard(rgba_img.width, rgba_img.height)
+    
+    # Paste transparent image onto checkerboard
+    cutout_composited = Image.alpha_composite(checkerboard, rgba_img)
+    
+    # Draw guides and highlights
+    draw = ImageDraw.Draw(cutout_composited)
+    for block in blocks:
+        x, y, w, h = int(block["x"]), int(block["y"]), int(block["width"]), int(block["height"])
+        is_selected = block["id"] in selected_ids
+        
+        if is_selected:
+            # Coral outline for selected cutout regions
+            draw.rectangle([x, y, x + w, y + h], outline=(255, 107, 107, 255), width=2)
+            # Add a subtle transparent overlay over the cutout area to tint it
+            overlay = Image.new("RGBA", cutout_composited.size, (0, 0, 0, 0))
+            overlay_draw = ImageDraw.Draw(overlay)
+            overlay_draw.rectangle([x, y, x + w, y + h], fill=(255, 107, 107, 30))
+            cutout_composited = Image.alpha_composite(cutout_composited, overlay)
+            draw = ImageDraw.Draw(cutout_composited)
+        else:
+            # Yellow outline for potential blocks
+            draw.rectangle([x, y, x + w, y + h], outline=(255, 215, 0, 120), width=1)
+            
+        # Draw ID badge
+        label_text = f"#{block['id']}"
+        draw.text(
+            (x + 4, y + 4),
+            label_text,
+            fill=(255, 255, 255, 255),
+            stroke_fill=(0, 0, 0, 255),
+            stroke_width=1
+        )
+        
+    return cutout_composited
+
+
+def draw_live_preview(bg_image_pil, blocks, selected_ids):
+    """Draw edited texts only for selected blocks on the background image."""
+    preview_img = bg_image_pil.copy()
+    draw = ImageDraw.Draw(preview_img)
+    
+    for block in blocks:
+        if block["id"] not in selected_ids:
+            continue
+            
+        text = block["text_edit"]
+        x, y = int(block["x"]), int(block["y"])
+        color = block["color"]
+        size = block.get("font_size_final", 14)
+        
+        # Load a suitable system font for rendering preview
+        font = None
+        font_style = block.get("font_style", "Gothic")
+        
+        # Candidate font paths (NFC strings)
+        candidates = []
+        if font_style == "Gothic":
+            candidates = [
+                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/Supplemental/Arial.ttf",
+                "/Library/Fonts/Arial.ttf"
+            ]
+        elif font_style == "Mincho":
+            candidates = [
+                "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+                "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+                "/Library/Fonts/Times New Roman.ttf"
+            ]
+        elif font_style == "Round":
+            candidates = [
+                "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
+                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/Supplemental/Arial.ttf"
+            ]
+        else:  # Design / Fallbacks
+            candidates = [
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+                "/System/Library/Fonts/Supplemental/Impact.ttf",
+                "/Library/Fonts/Impact.ttf"
+            ]
+            
+        # Try loading fonts by normalizing paths to NFD for Mac compat
+        for p in candidates:
+            try:
+                norm_p = unicodedata.normalize('NFD', p)
+                font = ImageFont.truetype(norm_p, int(size * 0.95))
+                break
+            except:
+                continue
+                
+        if font is None:
+            font = ImageFont.load_default()
+            
+        draw.text((x, y), text, fill=color, font=font)
+        
+    return preview_img
+
+
+def on_checkbox_change(block_id):
+    """Callback function triggered when a checkbox is toggled to update target blocks."""
+    cb_key = f"checkbox_block_{block_id}"
+    is_checked = st.session_state[cb_key]
+    if is_checked:
+        st.session_state.selected_block_ids.add(block_id)
+    else:
+        st.session_state.selected_block_ids.discard(block_id)
+        
+    # Regenerate selectively-inpainted background image
+    orig_img = st.session_state.orig_image
+    if orig_img is not None:
+        img_np_rgb = np.array(orig_img)
+        img_np_bgr = cv2.cvtColor(img_np_rgb, cv2.COLOR_RGB2BGR)
+        bg_np_bgr = inpaint_image(img_np_bgr, st.session_state.ocr_blocks, st.session_state.selected_block_ids)
+        bg_np_rgb = cv2.cvtColor(bg_np_bgr, cv2.COLOR_BGR2RGB)
+        st.session_state.bg_image = Image.fromarray(bg_np_rgb)
+
 
 def generate_demo_image():
     """Generates a beautiful modern dark-mode infographic demo image."""
@@ -198,98 +375,6 @@ def generate_demo_image():
         {"id": 6, "text": "Adjust sizes and\nprevent layout\noverflow instantly.", "x": 840, "y": 340, "width": 260, "height": 80, "font_style": "Gothic", "color": (200, 200, 210)}
     ]
     return demo_image_path, mock_blocks
-
-def draw_bounding_boxes(image_pil, blocks, selected_id=None):
-    """Draw bounding boxes of detected blocks on the original image."""
-    draw_img = image_pil.copy()
-    draw = ImageDraw.Draw(draw_img, "RGBA")
-    
-    for block in blocks:
-        x, y, w, h = int(block["x"]), int(block["y"]), int(block["width"]), int(block["height"])
-        is_selected = (selected_id == block["id"])
-        
-        # Determine colors for selection highlights
-        fill_color = (255, 180, 0, 40) if is_selected else (255, 255, 0, 15)
-        outline_color = (255, 180, 0, 220) if is_selected else (255, 255, 0, 100)
-        width = 3 if is_selected else 1
-        
-        draw.rectangle([x, y, x + w, y + h], fill=fill_color, outline=outline_color, width=width)
-        
-        # High visibility label for the block ID
-        label_text = f"#{block['id']}"
-        draw.text(
-            (x + 4, y + 4), 
-            label_text, 
-            fill=(255, 255, 255, 255), 
-            stroke_fill=(0, 0, 0, 255), 
-            stroke_width=1
-        )
-        
-    return draw_img
-
-def draw_live_preview(bg_image_pil, blocks):
-    """Draw edited texts on the inpainted background image for live preview."""
-    preview_img = bg_image_pil.copy()
-    draw = ImageDraw.Draw(preview_img)
-    
-    import unicodedata
-    
-    for block in blocks:
-        text = block["text_edit"]
-        x, y = int(block["x"]), int(block["y"])
-        color = block["color"]
-        size = block.get("font_size_final", 14)
-        
-        # Load a suitable system font for rendering preview
-        font = None
-        font_style = block.get("font_style", "Gothic")
-        
-        # Candidate font paths (NFC strings)
-        candidates = []
-        if font_style == "Gothic":
-            candidates = [
-                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/System/Library/Fonts/Supplemental/Arial.ttf",
-                "/Library/Fonts/Arial.ttf"
-            ]
-        elif font_style == "Mincho":
-            candidates = [
-                "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
-                "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
-                "/Library/Fonts/Times New Roman.ttf"
-            ]
-        elif font_style == "Round":
-            candidates = [
-                "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
-                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/System/Library/Fonts/Supplemental/Arial.ttf"
-            ]
-        else:  # Design / Fallbacks
-            candidates = [
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
-                "/System/Library/Fonts/Supplemental/Impact.ttf",
-                "/Library/Fonts/Impact.ttf"
-            ]
-            
-        # Try loading fonts by normalizing paths to NFD for Mac compat
-        for p in candidates:
-            try:
-                norm_p = unicodedata.normalize('NFD', p)
-                font = ImageFont.truetype(norm_p, int(size * 0.95))
-                break
-            except:
-                continue
-                
-        if font is None:
-            font = ImageFont.load_default()
-            
-        draw.text((x, y), text, fill=color, font=font)
-        
-    return preview_img
 
 
 # =====================================================================
@@ -356,6 +441,7 @@ def run_cloud_vision_ocr(image_bytes):
     except Exception as e:
         return None, str(e)
 
+
 # =====================================================================
 # Sidebar Configuration
 # =====================================================================
@@ -406,23 +492,10 @@ else:
     slide_width_inch = 10.0
     slide_height_inch = 7.5
 
+
 # =====================================================================
 # Application Main Workflow
 # =====================================================================
-
-# Initialize Session States
-if "ocr_blocks" not in st.session_state:
-    st.session_state.ocr_blocks = []
-if "bg_image" not in st.session_state:
-    st.session_state.bg_image = None
-if "orig_image" not in st.session_state:
-    st.session_state.orig_image = None
-if "image_aspect" not in st.session_state:
-    st.session_state.image_aspect = 16/9
-if "selected_block_id" not in st.session_state:
-    st.session_state.selected_block_id = None
-if "source_file_name" not in st.session_state:
-    st.session_state.source_file_name = "demo"
 
 # Handle Source Selection
 if demo_mode:
@@ -433,20 +506,15 @@ if demo_mode:
         img_np_bgr = cv2.imread(demo_img_path)
         img_np_rgb = cv2.cvtColor(img_np_bgr, cv2.COLOR_BGR2RGB)
         
-        # Inpaint text in background
-        bg_np_bgr = inpaint_image(img_np_bgr, mock_blocks)
-        bg_np_rgb = cv2.cvtColor(bg_np_bgr, cv2.COLOR_BGR2RGB)
-        bg_pil = Image.fromarray(bg_np_rgb)
-        
         # Populate session state
         st.session_state.orig_image = orig_img
-        st.session_state.bg_image = bg_pil
         st.session_state.image_aspect = orig_img.width / orig_img.height
+        st.session_state.source_file_name = "demo"
+        st.session_state.selected_block_ids = {0, 1, 3, 5}
         
         # Add scaling parameters to mock blocks
         blocks = []
         for b in mock_blocks:
-            # Estimate font_size_init from height and lines
             lines = b["text"].split("\n")
             num_lines = max(1, len([l for l in lines if l.strip()]))
             line_height = b["height"] / num_lines
@@ -466,7 +534,12 @@ if demo_mode:
                 "color": b["color"]
             })
         st.session_state.ocr_blocks = blocks
-        st.session_state.source_file_name = "demo"
+        
+        # Inpaint background based on default selection
+        bg_np_bgr = inpaint_image(img_np_bgr, blocks, st.session_state.selected_block_ids)
+        bg_np_rgb = cv2.cvtColor(bg_np_bgr, cv2.COLOR_BGR2RGB)
+        st.session_state.bg_image = Image.fromarray(bg_np_rgb)
+
 else:
     # Live Upload UI Panel
     st.markdown("### 📥 インフォグラフィック ファイルアップロード")
@@ -564,21 +637,17 @@ else:
                         "font_size_modifier": 0,
                         "color": text_color
                     })
-                
-                # Background inpainting
-                with st.spinner("🎨 OpenCV背景インペインティングを実行中（文字消去）..."):
-                    bg_np_bgr = inpaint_image(img_np_bgr, blocks)
-                    bg_np_rgb = cv2.cvtColor(bg_np_bgr, cv2.COLOR_BGR2RGB)
-                    bg_pil = Image.fromarray(bg_np_rgb)
-                    
-                st.session_state.orig_image = orig_img
-                st.session_state.bg_image = bg_pil
-                st.session_state.image_aspect = orig_img.width / orig_img.height
                 st.session_state.ocr_blocks = blocks
-                st.toast("🚀 画像解析と背景補完が完了しました！")
+                st.session_state.selected_block_ids = set()
+                st.session_state.selected_block_id = None
+                st.session_state.orig_image = orig_img
+                st.session_state.bg_image = orig_img
+                st.session_state.image_aspect = orig_img.width / orig_img.height
+                st.toast("🚀 画像解析が完了しました！編集したいブロックを選択してください。")
             else:
                 st.warning("⚠️ 画像から文字を抽出できませんでした。文字が鮮明であるか、ファイルが壊れていないか確認してください。")
                 st.stop()
+
 
 # =====================================================================
 # Main Workspace Presentation Layout
@@ -587,100 +656,99 @@ else:
 if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
     col_canvas, col_editor = st.columns([1, 1])
     
-    # Left Column: Visual Canvas Viewer
+    # Left Column: Cutout Preview & Checkbox Selection List
     with col_canvas:
         st.markdown(
             """
             <div class="glass-panel">
-                <h3 style='margin-top:0; color: #ff8e53; font-family: "Outfit", sans-serif;'>🖼️ 画像プレビュー & テキスト検出枠</h3>
-                <p style='color: #a0aec0; font-size:0.9rem;'>黄色の枠線が検出されたテキストエリアです。クリックして右のエディタで修正します。</p>
+                <h3 style='margin-top:0; color: #ff8e53; font-family: "Outfit", sans-serif;'>🖼️ 切り抜きプレビュー & 編集対象選択</h3>
+                <p style='color: #a0aec0; font-size:0.9rem;'>
+                    スライド上で編集可能にするテキストブロックにチェックを入れてください。<br>
+                    選択されたテキストは画像から透過で切り抜かれ（穴が開き）、右側のエディタで再編集・配置できます。
+                </p>
             </div>
             """, 
             unsafe_allow_html=True
         )
         
-        # Preview Mode Toggle
-        preview_mode = st.radio(
-            "プレビュー表示モード",
-            ["編集後のリアルタイム仕上がり (Live Preview)", "検出枠のハイライト（オリジナル）"],
-            horizontal=True,
-            key="preview_mode_toggle"
+        # Render transparent cutout image
+        cutout_img = generate_cutout_image(
+            st.session_state.orig_image,
+            st.session_state.ocr_blocks,
+            st.session_state.selected_block_ids
         )
+        st.image(cutout_img, use_column_width=True)
         
-        if "リアルタイム" in preview_mode:
-            # Render live preview by drawing edited text on inpainted background
-            preview_image = draw_live_preview(
-                st.session_state.bg_image,
-                st.session_state.ocr_blocks
-            )
-        else:
-            # Render original with bounding boxes
-            preview_image = draw_bounding_boxes(
-                st.session_state.orig_image, 
-                st.session_state.ocr_blocks,
-                selected_id=st.session_state.selected_block_id
-            )
-            
-        # Display image
-        st.image(preview_image, use_column_width=True)
+        # Checkbox list in scrollable container
+        st.markdown("##### 🔍 検出されたテキストブロック一覧")
+        with st.container(height=350):
+            for block in st.session_state.ocr_blocks:
+                cb_key = f"checkbox_block_{block['id']}"
+                is_checked = block["id"] in st.session_state.selected_block_ids
+                
+                # Checkbox to add/remove block from active list
+                st.checkbox(
+                    f"#{block['id']}: {block['text']}",
+                    value=is_checked,
+                    key=cb_key,
+                    on_change=on_checkbox_change,
+                    args=(block['id'],)
+                )
         
-        # Quick selector form
-        block_ids = [b["id"] for b in st.session_state.ocr_blocks]
-        selected_index = 0
-        if st.session_state.selected_block_id in block_ids:
-            selected_index = block_ids.index(st.session_state.selected_block_id)
-            
-        selected_id_input = st.selectbox(
-            "編集するテキストブロックIDを選択",
-            options=block_ids,
-            index=selected_index,
-            format_func=lambda bid: f"ブロック #{bid}: {st.session_state.ocr_blocks[bid]['text_edit'][:30]}...",
-            key="canvas_block_selector"
-        )
-        st.session_state.selected_block_id = selected_id_input
-        
-    # Right Column: Interactive Editor Dashboard
+    # Right Column: Interactive Editor Dashboard & Selective Live Preview
     with col_editor:
         st.markdown(
             """
             <div class="glass-panel">
-                <h3 style='margin-top:0; color: #4facfe; font-family: "Outfit", sans-serif;'>✍️ テキストオブジェクト編集</h3>
-                <p style='color: #a0aec0; font-size:0.9rem;'>文字内容・フォントスタイル・サイズ・カラーを個別に最適化できます。</p>
+                <h3 style='margin-top:0; color: #4facfe; font-family: "Outfit", sans-serif;'>✍️ 編集仕上がりプレビュー (Live Preview)</h3>
+                <p style='color: #a0aec0; font-size:0.9rem;'>選択されたテキストが消去され、入力された新しいテキストが重ね合わされたリアルタイムのプレビューです。</p>
             </div>
             """, 
             unsafe_allow_html=True
         )
         
-        # Display selected block details
-        active_id = st.session_state.selected_block_id
-        if active_id is not None:
+        # Selective live preview rendering
+        live_preview_img = draw_live_preview(
+            st.session_state.bg_image,
+            st.session_state.ocr_blocks,
+            st.session_state.selected_block_ids
+        )
+        st.image(live_preview_img, use_column_width=True)
+        
+        st.markdown("### 📝 選択テキストの編集")
+        selected_list = sorted(list(st.session_state.selected_block_ids))
+        if not selected_list:
+            st.info("💡 左側の一覧から編集したいテキストを選択してください。")
+        else:
+            # Dropdown to select which of the selected blocks to customize
+            active_id = st.selectbox(
+                "編集・カスタマイズするブロックを選択",
+                options=selected_list,
+                format_func=lambda bid: f"ブロック #{bid}: {st.session_state.ocr_blocks[bid]['text_edit'][:30]}...",
+                key="active_block_selector"
+            )
+            
             block = st.session_state.ocr_blocks[active_id]
+            st.markdown(f"#### ⚙️ ブロック #{active_id} 編集設定")
             
-            st.markdown(f"#### 📝 ブロック #{active_id} 編集設定")
-            
-            # Wrap inputs in a neat card
             with st.container():
                 st.markdown('<div class="block-card">', unsafe_allow_html=True)
                 
-                # Text content text area
+                # Text content
                 new_text_val = st.text_area(
                     "テキスト内容",
                     value=block["text_edit"],
                     key=f"text_edit_val_{active_id}"
                 )
-                
-                # Update text_edit immediately
                 block["text_edit"] = new_text_val
                 
-                # Font style select box
+                # Font style
                 font_options = [
                     "Gothic系 (Arial / MS Gothic)",
                     "Mincho系 (Times New Roman / MS Mincho)",
                     "Round系 (Arial Rounded / HG Maru Gothic)",
                     "Design系 (Impact / Trebuchet MS)"
                 ]
-                
-                # Map block font style to selectbox option index
                 current_style = block["font_style"]
                 style_index = 0
                 if current_style == "Mincho":
@@ -697,7 +765,6 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                     key=f"font_style_select_{active_id}"
                 )
                 
-                # Update font_style mapping
                 if "Gothic" in selected_style:
                     block["font_style"] = "Gothic"
                     block["font_name"] = "Arial"
@@ -711,7 +778,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                     block["font_style"] = "Design"
                     block["font_name"] = "Impact"
                 
-                # Custom overrides checkbox
+                # Custom override
                 custom_override = st.checkbox(
                     "カスタムフォント名を入力する (パワーユーザー向け)", 
                     value=("font_custom_name" in block),
@@ -728,8 +795,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                 elif "font_custom_name" in block:
                     del block["font_custom_name"]
                 
-                # Font Size details & calculations
-                # Calculate auto-scaling font size
+                # Auto scale indicator
                 w_box = block["width"]
                 w_text = estimate_text_width(block["text_edit"], block["font_size_init"])
                 scale = min(1.0, w_box / w_text) if w_text > 0 else 1.0
@@ -745,7 +811,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                     unsafe_allow_html=True
                 )
                 
-                # Manual font size offset slider
+                # Size modifier slider
                 size_modifier = st.slider(
                     "フォントサイズ微調整 (pt)",
                     min_value=-30,
@@ -756,20 +822,18 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                 )
                 block["font_size_modifier"] = size_modifier
                 
-                # Calculated final font size
                 final_font_size = max(5, auto_font_size + size_modifier)
                 block["font_size_final"] = final_font_size
                 
                 st.markdown(f"<b>最終適用フォントサイズ:</b> <span style='color: #4facfe; font-size:1.1rem;'>{final_font_size}pt</span>", unsafe_allow_html=True)
                 
-                # Color Picker
+                # Color picker
                 hex_init = '#{:02x}{:02x}{:02x}'.format(*block["color"])
                 selected_hex = st.color_picker(
                     "テキストカラー",
                     value=hex_init,
                     key=f"color_picker_{active_id}"
                 )
-                # Convert hex to RGB tuple
                 hex_clean = selected_hex.lstrip('#')
                 block["color"] = tuple(int(hex_clean[i:i+2], 16) for i in (0, 2, 4))
                 
@@ -783,8 +847,9 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
         st.markdown(
             f"""
             - 検出テキストブロック数: **{len(st.session_state.ocr_blocks)}** 個
+            - 編集可能に設定したブロック数: **{len(st.session_state.selected_block_ids)}** 個
             - 出力スライド比率: **{slide_aspect}**
-            - 背景画像: **文字消去補完済みの背景（OpenCV Inpaint）** を全画面適用
+            - 背景画像: **選択された文字のみ消去した背景（OpenCV Inpaint）** を全画面適用
             """
         )
         
@@ -810,6 +875,8 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
             orig_w, orig_h = st.session_state.orig_image.width, st.session_state.orig_image.height
             
             for b in st.session_state.ocr_blocks:
+                if b["id"] not in st.session_state.selected_block_ids:
+                    continue
                 # Calculate slide proportional coordinates
                 left = Inches((b["x"] / orig_w) * slide_width_inch)
                 top = Inches((b["y"] / orig_h) * slide_height_inch)
@@ -857,7 +924,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
             
         # Build PNG / JPEG image bytes dynamically
         try:
-            preview_img = draw_live_preview(st.session_state.bg_image, st.session_state.ocr_blocks)
+            preview_img = draw_live_preview(st.session_state.bg_image, st.session_state.ocr_blocks, st.session_state.selected_block_ids)
             
             png_buffer = io.BytesIO()
             preview_img.save(png_buffer, format="PNG")
