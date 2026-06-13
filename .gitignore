@@ -1,0 +1,29 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Streamlit logs & config
+.streamlit/
+*.log
+
+# OS temporary files
+.DS_Store
+Thumbs.db
+
+# Credentials & Keys (Crucial to prevent leakage)
+*.json
+!README.md   # Make sure README.md is not ignored if it ends with json (it doesn't, but just in case)
+# Exclude potential key names explicitly
+*key*.json
+*credential*.json
+*service_account*.json
+gcp*.json
+
+# Downloaded slides/images (artifacts from local runs)
+*.pptx
+*.png
+*.jpg
+*.jpeg
+*.pdf
+# Exception for demo if any, but since we generate demo on-the-fly, we can ignore pngs safely
