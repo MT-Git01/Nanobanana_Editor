@@ -555,13 +555,27 @@ else:
                     if len(doc) == 0:
                         st.error("PDF内にページが見つかりませんでした。")
                         st.stop()
-                    # Render the first page at high quality (2.0x zoom/144 DPI)
+                    # Render page or extract original embedded image to prevent layout crop clipping
                     page = doc.load_page(0)
-                    zoom = 2.0
-                    mat = fitz.Matrix(zoom, zoom)
-                    pix = page.get_pixmap(matrix=mat)
-                    img_data = pix.tobytes("png")
-                    orig_img = Image.open(io.BytesIO(img_data)).convert("RGB")
+                    images = page.get_images()
+                    
+                    if len(doc) == 1 and len(images) == 1:
+                        xref = images[0][0]
+                        base_image = doc.extract_image(xref)
+                        img_bytes = base_image["image"]
+                        orig_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                        
+                        # Apply rotation if page is rotated in PDF
+                        rotation = page.rotation
+                        if rotation != 0:
+                            orig_img = orig_img.rotate(-rotation, expand=True)
+                    else:
+                        # Render the first page at high quality (2.0x zoom/144 DPI)
+                        zoom = 2.0
+                        mat = fitz.Matrix(zoom, zoom)
+                        pix = page.get_pixmap(matrix=mat)
+                        img_data = pix.tobytes("png")
+                        orig_img = Image.open(io.BytesIO(img_data)).convert("RGB")
                 except Exception as e:
                     st.error(f"PDF処理エラー: {e}")
                     st.info("💡 PDF解析エラーが発生しました。ファイルが破損していないか、画像形式（PNG/JPG）でお試しください。")
