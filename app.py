@@ -939,13 +939,34 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
             png_bytes = b""
             jpeg_bytes = b""
 
+        # Direct save to local Downloads folder fallback
+        downloads_dir = os.path.expanduser("~/Downloads")
+        if os.path.exists(downloads_dir):
+            if st.button("💾 ローカルPCの「ダウンロード」フォルダに直接保存する", key="direct_save_btn", use_container_width=True):
+                try:
+                    pptx_path = os.path.join(downloads_dir, "nanobanana_editable_slide.pptx")
+                    png_path = os.path.join(downloads_dir, "nanobanana_edited_image.png")
+                    jpeg_path = os.path.join(downloads_dir, "nanobanana_edited_image.jpg")
+                    
+                    with open(pptx_path, "wb") as f:
+                        f.write(pptx_bytes)
+                    with open(png_path, "wb") as f:
+                        f.write(png_bytes)
+                    with open(jpeg_path, "wb") as f:
+                        f.write(jpeg_bytes)
+                        
+                    st.success(f"🎉 ダウンロードフォルダに直接保存しました！\n- {pptx_path}\n- {png_path}\n- {jpeg_path}")
+                except Exception as e:
+                    st.error(f"直接保存に失敗しました: {e}")
+
         # Direct download buttons
         st.download_button(
             label="📥 編集可能な.pptxをダウンロード",
             data=pptx_bytes,
             file_name="nanobanana_editable_slide.pptx",
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            use_container_width=True
+            use_container_width=True,
+            key="download_pptx_btn"
         )
         
         col_png, col_jpg = st.columns(2)
@@ -955,7 +976,8 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                 data=png_bytes,
                 file_name="nanobanana_edited_image.png",
                 mime="image/png",
-                use_container_width=True
+                use_container_width=True,
+                key="download_png_btn"
             )
         with col_jpg:
             st.download_button(
@@ -963,7 +985,8 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                 data=jpeg_bytes,
                 file_name="nanobanana_edited_image.jpg",
                 mime="image/jpeg",
-                use_container_width=True
+                use_container_width=True,
+                key="download_jpg_btn"
             )
 else:
     # Initial instruction screen if no files uploaded/demo initialized
