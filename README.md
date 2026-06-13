@@ -74,11 +74,27 @@ git clone https://github.com/MT-Git01/Nanobanana_Editor.git
 cd Nanobanana_Editor
 ```
 
-### ② 依存パッケージのインストール
-Python 3.10 以上がインストールされている環境で、以下を実行します：
-```bash
-pip install streamlit opencv-python python-pptx google-cloud-vision PyMuPDF pillow
-```
+### ② 環境構築と依存パッケージのインストール (Miniconda + conda-forge 推奨)
+
+企業内での商用利用など、ライセンスの観点から **Miniconda** および **conda-forge** チャンネルの使用を推奨します（Anaconda Commercial Edition のライセンス制限を受けず、商用利用無料です）。
+
+1. **Miniconda のインストール**:
+   お使いの OS に合わせて [Miniconda 公式ページ](https://docs.anaconda.com/miniconda/) から Miniconda をダウンロード・インストールしてください。
+
+2. **仮想環境の作成と有効化**:
+   Python 3.10 の環境を作成し、アクティベートします。
+   ```bash
+   conda create -n nanobanana-env python=3.10 -c conda-forge -y
+   conda activate nanobanana-env
+   ```
+
+3. **依存パッケージのインストール**:
+   conda-forge チャンネルから必要なパッケージを一括でインストールします。
+   ```bash
+   conda install -c conda-forge streamlit opencv python-pptx google-cloud-vision pymupdf pillow -y
+   ```
+
+*(※ 従来の pip を利用したい場合は、`pip install streamlit opencv-python python-pptx google-cloud-vision PyMuPDF pillow` でもインストール可能です。)*
 
 ---
 
