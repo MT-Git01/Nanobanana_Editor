@@ -242,7 +242,8 @@ def draw_live_preview(bg_image_pil, blocks, selected_ids):
             continue
             
         text = block["text_edit"]
-        x, y = int(block["x"]), int(block["y"])
+        x = int(block["x"]) + block.get("x_offset", 0)
+        y = int(block["y"]) + block.get("y_offset", 0)
         color = block["color"]
         size = block.get("font_size_final", 14)
         
@@ -779,8 +780,36 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                 elif "font_custom_name" in block:
                     del block["font_custom_name"]
                 
+                # Position & Width offset inputs
+                st.markdown("##### 📍 位置・サイズの微調整 (シフト)")
+                col_pos_x, col_pos_y = st.columns(2)
+                with col_pos_x:
+                    x_offset = st.number_input(
+                        "X軸シフト (左右) [px]",
+                        value=block.get("x_offset", 0),
+                        step=5,
+                        key=f"x_offset_input_{active_id}"
+                    )
+                    block["x_offset"] = x_offset
+                with col_pos_y:
+                    y_offset = st.number_input(
+                        "Y軸シフト (上下) [px]",
+                        value=block.get("y_offset", 0),
+                        step=5,
+                        key=f"y_offset_input_{active_id}"
+                    )
+                    block["y_offset"] = y_offset
+                    
+                w_offset = st.number_input(
+                    "幅の拡張/縮小 [px]",
+                    value=block.get("w_offset", 0),
+                    step=5,
+                    key=f"w_offset_input_{active_id}"
+                )
+                block["w_offset"] = w_offset
+
                 # Auto scale indicator
-                w_box = block["width"]
+                w_box = max(10, block["width"] + block.get("w_offset", 0))
                 w_text = estimate_text_width(block["text_edit"], block["font_size_init"])
                 scale = min(1.0, w_box / w_text) if w_text > 0 else 1.0
                 auto_font_size = int(block["font_size_init"] * scale)
@@ -875,10 +904,14 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
             for b in st.session_state.ocr_blocks:
                 if b["id"] not in st.session_state.selected_block_ids:
                     continue
-                # Calculate slide proportional coordinates
-                left = Inches((b["x"] / orig_w) * current_width)
-                top = Inches((b["y"] / orig_h) * current_height)
-                width = Inches((b["width"] / orig_w) * current_width)
+                # Calculate slide proportional coordinates including user shifts
+                x_shifted = b["x"] + b.get("x_offset", 0)
+                y_shifted = b["y"] + b.get("y_offset", 0)
+                w_shifted = max(10, b["width"] + b.get("w_offset", 0))
+                
+                left = Inches((x_shifted / orig_w) * current_width)
+                top = Inches((y_shifted / orig_h) * current_height)
+                width = Inches((w_shifted / orig_w) * current_width)
                 height = Inches((b["height"] / orig_h) * current_height)
                 
                 tx_box = slide.shapes.add_textbox(left, top, width, height)
