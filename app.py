@@ -482,15 +482,8 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("📐 出力スライド比率")
 slide_aspect = st.sidebar.selectbox(
     "アスペクト比を選択",
-    ["16:9 (Widescreen)", "4:3 (Standard)"]
+    ["元画像に合わせる (Auto)", "16:9 (Widescreen)", "4:3 (Standard)"]
 )
-
-if "16:9" in slide_aspect:
-    slide_width_inch = 13.333
-    slide_height_inch = 7.5
-else:
-    slide_width_inch = 10.0
-    slide_height_inch = 7.5
 
 
 # =====================================================================
@@ -579,17 +572,8 @@ else:
             img_np_rgb = np.array(orig_img)
             img_np_bgr = cv2.cvtColor(img_np_rgb, cv2.COLOR_RGB2BGR)
             
-            # Auto-resize huge images to fit memory and render faster
-            h, w = img_np_bgr.shape[:2]
-            scale_ratio = 1.0
-            if max(h, w) > 1920:
-                scale_ratio = 1920.0 / max(h, w)
-                new_w = int(w * scale_ratio)
-                new_h = int(h * scale_ratio)
-                img_np_bgr = cv2.resize(img_np_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                img_np_rgb = cv2.cvtColor(img_np_bgr, cv2.COLOR_BGR2RGB)
-                orig_img = Image.fromarray(img_np_rgb)
-                st.info(f"💡 高解像度画像を最適なパフォーマンスサイズ（{new_w}x{new_h}）に自動縮小しました。")
+            # Maintain original high resolution (1K, 2K, 4K) exactly as requested
+            pass
                 
             # Connect Vision API OCR (Supporting Workload Identity and Local ADC natively)
             with st.spinner("🔍 Google Cloud Vision API を使って文字と座標を検出中..."):
@@ -855,9 +839,20 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
         
         # Build PPTX Presentation dynamically
         try:
+            # Determine slide dimensions dynamically based on selected aspect ratio and current image aspect
+            if "元画像に合わせる" in slide_aspect and st.session_state.image_aspect is not None:
+                current_height = 7.5
+                current_width = current_height * st.session_state.image_aspect
+            elif "16:9" in slide_aspect:
+                current_width = 13.333
+                current_height = 7.5
+            else:
+                current_width = 10.0
+                current_height = 7.5
+
             prs = Presentation()
-            prs.slide_width = Inches(slide_width_inch)
-            prs.slide_height = Inches(slide_height_inch)
+            prs.slide_width = Inches(current_width)
+            prs.slide_height = Inches(current_height)
             
             # Add slide (blank layout)
             blank_layout = prs.slide_layouts[6]
@@ -874,14 +869,17 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
             # Overlay editable text frames
             orig_w, orig_h = st.session_state.orig_image.width, st.session_state.orig_image.height
             
+            # PowerPoint font size scaling factor
+            pptx_font_scale = (current_height * 72) / orig_h
+            
             for b in st.session_state.ocr_blocks:
                 if b["id"] not in st.session_state.selected_block_ids:
                     continue
                 # Calculate slide proportional coordinates
-                left = Inches((b["x"] / orig_w) * slide_width_inch)
-                top = Inches((b["y"] / orig_h) * slide_height_inch)
-                width = Inches((b["width"] / orig_w) * slide_width_inch)
-                height = Inches((b["height"] / orig_h) * slide_height_inch)
+                left = Inches((b["x"] / orig_w) * current_width)
+                top = Inches((b["y"] / orig_h) * current_height)
+                width = Inches((b["width"] / orig_w) * current_width)
+                height = Inches((b["height"] / orig_h) * current_height)
                 
                 tx_box = slide.shapes.add_textbox(left, top, width, height)
                 tf = tx_box.text_frame
@@ -898,14 +896,14 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                 p = tf.paragraphs[0]
                 p.text = lines[0]
                 p.font.name = b.get("font_name", "Arial")
-                p.font.size = Pt(b.get("font_size_final", 14))
+                p.font.size = Pt(b.get("font_size_final", 14) * pptx_font_scale)
                 p.font.color.rgb = RGBColor(*b["color"])
                 
                 for line in lines[1:]:
                     p_line = tf.add_paragraph()
                     p_line.text = line
                     p_line.font.name = b.get("font_name", "Arial")
-                    p_line.font.size = Pt(b.get("font_size_final", 14))
+                    p_line.font.size = Pt(b.get("font_size_final", 14) * pptx_font_scale)
                     p_line.font.color.rgb = RGBColor(*b["color"])
                     
             # Clean up temporary background file
