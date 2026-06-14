@@ -249,48 +249,90 @@ def draw_live_preview(bg_image_pil, blocks, selected_ids):
         
         # Load a suitable system font for rendering preview
         font = None
-        font_style = block.get("font_style", "Gothic")
+        win_fonts = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "Fonts")
         
-        # Candidate font paths (NFC strings)
-        candidates = []
-        if font_style == "Gothic":
-            candidates = [
-                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/System/Library/Fonts/Supplemental/Arial.ttf",
-                "/Library/Fonts/Arial.ttf"
-            ]
-        elif font_style == "Mincho":
-            candidates = [
-                "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
-                "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
-                "/Library/Fonts/Times New Roman.ttf"
-            ]
-        elif font_style == "Round":
-            candidates = [
-                "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
-                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/System/Library/Fonts/Supplemental/Arial.ttf"
-            ]
-        else:  # Design / Fallbacks
-            candidates = [
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
-                "/System/Library/Fonts/Supplemental/Impact.ttf",
-                "/Library/Fonts/Impact.ttf"
-            ]
-            
-        # Try loading fonts by normalizing paths to NFD for Mac compat
-        for p in candidates:
+        # 1. Try custom font name if provided
+        custom_name = block.get("font_name")
+        if custom_name:
+            # Try as-is
             try:
-                norm_p = unicodedata.normalize('NFD', p)
-                font = ImageFont.truetype(norm_p, int(size * 0.95))
-                break
+                font = ImageFont.truetype(custom_name, int(size * 0.95))
             except:
-                continue
+                # Try in Windows Fonts folder
+                try:
+                    font = ImageFont.truetype(os.path.join(win_fonts, custom_name), int(size * 0.95))
+                except:
+                    pass
+                    
+        # 2. Fallback to style-based candidates if custom font loading failed/not provided
+        if font is None:
+            font_style = block.get("font_style", "Gothic")
+            candidates = []
+            if font_style == "Gothic":
+                candidates = [
+                    # Windows candidates
+                    os.path.join(win_fonts, "msgothic.ttc"),
+                    os.path.join(win_fonts, "meiryo.ttc"),
+                    os.path.join(win_fonts, "yugothic.ttc"),
+                    os.path.join(win_fonts, "arial.ttf"),
+                    # Mac candidates
+                    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                    "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+                    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                    "/System/Library/Fonts/Supplemental/Arial.ttf",
+                    "/Library/Fonts/Arial.ttf"
+                ]
+            elif font_style == "Mincho":
+                candidates = [
+                    # Windows candidates
+                    os.path.join(win_fonts, "msmincho.ttc"),
+                    os.path.join(win_fonts, "yumin.ttf"),
+                    os.path.join(win_fonts, "times.ttf"),
+                    # Mac candidates
+                    "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+                    "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+                    "/Library/Fonts/Times New Roman.ttf"
+                ]
+            elif font_style == "Round":
+                candidates = [
+                    # Windows candidates
+                    os.path.join(win_fonts, "meiryo.ttc"),
+                    os.path.join(win_fonts, "msgothic.ttc"),
+                    os.path.join(win_fonts, "arial.ttf"),
+                    # Mac candidates
+                    "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
+                    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                    "/System/Library/Fonts/Supplemental/Arial.ttf"
+                ]
+            else:  # Design / Fallbacks
+                candidates = [
+                    # Windows candidates
+                    os.path.join(win_fonts, "impact.ttf"),
+                    os.path.join(win_fonts, "trebuc.ttf"),
+                    os.path.join(win_fonts, "arialbd.ttf"),
+                    # Mac candidates
+                    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                    "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+                    "/System/Library/Fonts/Supplemental/Impact.ttf",
+                    "/Library/Fonts/Impact.ttf"
+                ]
                 
+            # Try loading candidates
+            for p in candidates:
+                try:
+                    # Try original path
+                    font = ImageFont.truetype(p, int(size * 0.95))
+                    break
+                except:
+                    try:
+                        # Try normalized NFD path for macOS compatibility
+                        norm_p = unicodedata.normalize('NFD', p)
+                        font = ImageFont.truetype(norm_p, int(size * 0.95))
+                        break
+                    except:
+                        continue
+                        
         if font is None:
             font = ImageFont.load_default()
             
@@ -676,7 +718,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
             st.session_state.ocr_blocks,
             st.session_state.selected_block_ids
         )
-        st.image(cutout_img, use_column_width=True)
+        st.image(cutout_img, width='stretch')
         
         # Checkbox list in scrollable container
         st.markdown("##### 🔍 検出されたテキストブロック一覧")
@@ -712,7 +754,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
             st.session_state.ocr_blocks,
             st.session_state.selected_block_ids
         )
-        st.image(live_preview_img, use_column_width=True)
+        st.image(live_preview_img, width='stretch')
         
         st.markdown("### 📝 選択テキストの編集")
         selected_list = sorted(list(st.session_state.selected_block_ids))
@@ -987,7 +1029,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
         # Direct save to local Downloads folder fallback
         downloads_dir = os.path.expanduser("~/Downloads")
         if os.path.exists(downloads_dir):
-            if st.button("💾 ローカルPCの「ダウンロード」フォルダに直接保存する", key="direct_save_btn", use_container_width=True):
+            if st.button("💾 ローカルPCの「ダウンロード」フォルダに直接保存する", key="direct_save_btn", width='stretch'):
                 try:
                     pptx_path = os.path.join(downloads_dir, "nanobanana_editable_slide.pptx")
                     png_path = os.path.join(downloads_dir, "nanobanana_edited_image.png")
@@ -1010,7 +1052,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
             data=pptx_bytes,
             file_name="nanobanana_editable_slide.pptx",
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            use_container_width=True,
+            width='stretch',
             key="download_pptx_btn"
         )
         
@@ -1021,7 +1063,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                 data=png_bytes,
                 file_name="nanobanana_edited_image.png",
                 mime="image/png",
-                use_container_width=True,
+                width='stretch',
                 key="download_png_btn"
             )
         with col_jpg:
@@ -1030,7 +1072,7 @@ if st.session_state.orig_image is not None and st.session_state.ocr_blocks:
                 data=jpeg_bytes,
                 file_name="nanobanana_edited_image.jpg",
                 mime="image/jpeg",
-                use_container_width=True,
+                width='stretch',
                 key="download_jpg_btn"
             )
 else:

@@ -2,6 +2,8 @@
 
 Nanobanana Editor は、インフォグラフィック画像（PNG/JPG）や PDF ファイルを解析し、**「ユーザーが選択した文字の消去・背景復元（選択的インペインティング）」** と **「編集可能な PowerPoint テキストオブジェクトへの変換」** を同時に行うWebアプリケーションです。
 
+本アプリケーションは、**macOS および Windows 11 の両方のマルチプラットフォーム環境に完全対応**しています。右側のプレビュー画面における文字描画とフォントサイズ調整は、それぞれのOSのシステムフォントを自動認識して正確に反映されます。
+
 インフォグラフィック全体のデザインを崩すことなく、テキストを修正したい箇所だけを選択して PowerPoint（`.pptx`）スライドや高解像度画像を生成できます。生成されたスライドは、Microsoft PowerPoint や Google スライドにインポートして、100% 自由に再編集可能です。
 
 ---
@@ -15,7 +17,7 @@ Nanobanana Editor は、インフォグラフィック画像（PNG/JPG）や PDF
 * **画像処理 (文字消去 & 背景復元):** OpenCV (Telea Inpainting ロジック)
 * **PDF 解析:** PyMuPDF (`fitz` / システム依存バイナリ `poppler` 不要の純 Python 実装)
 * **Officeファイル生成:** `python-pptx`
-* **プレビュー文字描画:** Pillow (`PIL.ImageDraw` / macOS 向けに NFD パスによるヒラギノフォント対応)
+* **プレビュー文字描画:** Pillow (`PIL.ImageDraw` / macOSのヒラギノフォント、Windowsのメイリオ・MSゴシック等のシステムフォント両対応)
 
 ### 🌟 主な機能要件
 1. **選択的インペインティング (Selective Inpainting)**:
